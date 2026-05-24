@@ -21,15 +21,23 @@ import {
   Trash2,
   Loader2,
   Sparkles,
-  Check
+  Check,
+  Eye,
+  EyeOff,
+  Volume2,
+  VolumeX,
+  Sun,
+  Moon,
+  Smartphone,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-const Card = ({ children, className = "" }: { children: React.ReactNode, className?: string }) => (
-  <div className={`geometric-card rounded-2xl p-6 ${className}`}>
+const Card = ({ children, className = "", ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
+  <div className={`geometric-card rounded-2xl p-6 ${className}`} {...props}>
     {children}
   </div>
 );
@@ -42,14 +50,58 @@ const InputGroup = ({ label, value, type = "text", placeholder = "", onChange }:
       value={value}
       placeholder={placeholder}
       onChange={onChange}
-      className="w-full geometric-input rounded-xl px-4 py-3 text-sm text-white focus:ring-0 outline-none"
+      className="w-full geometric-input rounded-xl px-4 py-3 text-sm text-slate-50 focus:ring-0 outline-none"
     />
   </div>
 );
 
+const safeJsonParse = (key: string, fallback: any) => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : fallback;
+  } catch (e) {
+    console.error(`Error parsing localStorage key "${key}":`, e);
+    return fallback;
+  }
+};
+
+const safeLocalStorageSet = (key: string, value: any) => {
+  try {
+    localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+  } catch (e) {
+    console.error(`Error saving to localStorage key "${key}":`, e);
+  }
+};
+
+const safeNumber = (val: any) => {
+  const num = Number(val);
+  return isNaN(num) ? 0 : num;
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('inicio');
+  const [showHelp, setShowHelp] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showTotal, setShowTotal] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  React.useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    localStorage.setItem('theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   const changeDate = (days: number) => {
     const newDate = new Date(selectedDate);
@@ -57,13 +109,10 @@ export default function App() {
     setSelectedDate(newDate);
   };
 
-  const [history, setHistory] = useState<any[]>(() => {
-    const saved = localStorage.getItem('shift_history');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [history, setHistory] = useState<any[]>(() => safeJsonParse('shift_history', []));
 
   React.useEffect(() => {
-    localStorage.setItem('shift_history', JSON.stringify(history));
+    safeLocalStorageSet('shift_history', history);
   }, [history]);
 
   const stats = React.useMemo(() => {
@@ -78,19 +127,158 @@ export default function App() {
       const itemMonthYear = itemDate.toLocaleDateString('pt-BR', { month: 'numeric', year: 'numeric' });
       const itemYear = itemDate.getFullYear().toString();
 
-      if (itemDayStr === todayStr) acc.day += item.net;
-      if (itemMonthYear === monthYear) acc.month += item.net;
-      if (itemYear === year) acc.year += item.net;
+      if (itemDayStr === todayStr) {
+        acc.day += safeNumber(item.net);
+        acc.dayGross += safeNumber(item.total);
+      }
+      if (itemMonthYear === monthYear) acc.month += safeNumber(item.net);
+      if (itemYear === year) acc.year += safeNumber(item.net);
       
       return acc;
-    }, { day: 0, month: 0, year: 0 });
+    }, { day: 0, dayGross: 0, month: 0, year: 0 });
   }, [history]);
-  const [dailyGoal, setDailyGoal] = useState<number | string>('');
-  const [sales, setSales] = useState([
+
+  const [fuelHistory, setFuelHistory] = useState<any[]>(() => safeJsonParse('fuel_history', []));
+
+  React.useEffect(() => {
+    safeLocalStorageSet('fuel_history', fuelHistory);
+  }, [fuelHistory]);
+
+  const fuelStats = React.useMemo(() => {
+    const now = new Date();
+    const monthYear = now.toLocaleDateString('pt-BR', { month: 'numeric', year: 'numeric' });
+    
+    return fuelHistory.reduce((acc, item) => {
+      const itemDate = new Date(item.id);
+      const itemMonthYear = itemDate.toLocaleDateString('pt-BR', { month: 'numeric', year: 'numeric' });
+      
+      if (itemMonthYear === monthYear) {
+        acc.monthlyTotal += safeNumber(item.totalCost);
+        acc.monthlyQty += safeNumber(item.qty);
+      }
+      return acc;
+    }, { monthlyTotal: 0, monthlyQty: 0 });
+  }, [fuelHistory]);
+
+  const [dailyGoal, setDailyGoal] = useState<number | string>(() => localStorage.getItem('dailyGoal') || '');
+  const [sales, setSales] = useState(() => safeJsonParse('sales', [
     { id: 1, name: 'Água Mineral', qty: '' as number | string, price: '' as number | string },
     { id: 2, name: 'Barras de Cereal', qty: '' as number | string, price: '' as number | string },
-  ]);
+  ]));
+
   const [confirmedSaleId, setConfirmedSaleId] = useState<number | null>(null);
+  const [confirmedNameId, setConfirmedNameId] = useState<number | null>(null);
+  const [notifiedMilestones, setNotifiedMilestones] = useState<string[]>(() => safeJsonParse('notified_milestones', []));
+
+  const [uberData, setUberData] = useState(() => safeJsonParse('uberData', { earnings: '' as number | string, km: '' as number | string, min: '' as number | string }));
+  const [uberManual, setUberManual] = useState(() => safeJsonParse('uberManual', { earnings: '' as number | string, km: '' as number | string, min: '' as number | string }));
+  const [ninenineData, setNinenineData] = useState(() => safeJsonParse('ninenineData', { earnings: '' as number | string, km: '' as number | string, min: '' as number | string }));
+  const [ninenineManual, setNinenineManual] = useState(() => safeJsonParse('ninenineManual', { earnings: '' as number | string, km: '' as number | string, min: '' as number | string }));
+  const [ocrLoaded, setOcrLoaded] = useState<{uber: boolean, ninenine: boolean}>(() => safeJsonParse('ocrLoaded', {uber: false, ninenine: false}));
+  const [isProcessing, setIsProcessing] = useState<{uber?: boolean, ninenine?: boolean}>({});
+  
+  const [fuelQty, setFuelQty] = useState<number | string>(() => localStorage.getItem('fuelQty') || '');
+  const [fuelPrice, setFuelPrice] = useState<number | string>(() => localStorage.getItem('fuelPrice') || '');
+
+  // Request notification permission and reset milestones on new day
+  React.useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const todayStr = new Date().toLocaleDateString('pt-BR');
+    const lastMilestoneDate = localStorage.getItem('last_milestone_date');
+    if (lastMilestoneDate !== todayStr) {
+      setNotifiedMilestones([]);
+      localStorage.setItem('last_milestone_date', todayStr);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('notified_milestones', notifiedMilestones);
+  }, [notifiedMilestones]);
+
+  const totalEarnings = Number(uberData.earnings || 0) + Number(ninenineData.earnings || 0) + sales.reduce((acc, sale) => acc + (Number(sale.qty || 0) * Number(sale.price || 0)), 0);
+  const currentTotalGrossToday = stats.dayGross + totalEarnings;
+
+  const playNotificationSound = (isVictory: boolean) => {
+    if (!audioEnabled) return;
+    
+    // Using widely accessible free sound effects
+    // Victory: Triumphal Fanfare, Achievement: Bright Ding
+    const soundUrl = isVictory 
+      ? 'https://assets.mixkit.co/active_storage/sfx/2013/2013-preview.mp3' 
+      : 'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3';
+
+    try {
+      const audio = new Audio(soundUrl);
+      audio.volume = 0.6;
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.warn("Audio playback issue:", e);
+        });
+      }
+    } catch (e) {
+      console.error("Audio error:", e);
+    }
+  };
+
+  // Daily Goal Notification Logic
+  React.useEffect(() => {
+    if (dailyGoal && Number(dailyGoal) > 0 && currentTotalGrossToday > 0) {
+      const progress = (currentTotalGrossToday / Number(dailyGoal)) * 100;
+      const milestones = [
+        { percentage: 25, label: '25% da meta! Começo promissor, continue assim.' },
+        { percentage: 50, label: '50% da meta atingida! Foco que falta pouco.' },
+        { percentage: 75, label: '75% concluído! Você está voando hoje.' },
+        { percentage: 100, label: '🎯 META BATIDA! Parabéns, dia concluído com sucesso!' }
+      ];
+
+      // Find the highest milestone reached that hasn't been notified yet
+      let highestNewMilestone = -1;
+      milestones.forEach(m => {
+        if (progress >= m.percentage && !notifiedMilestones.includes(String(m.percentage))) {
+          if (m.percentage > highestNewMilestone) {
+            highestNewMilestone = m.percentage;
+          }
+        }
+      });
+
+      if (highestNewMilestone !== -1) {
+        const milestone = milestones.find(m => m.percentage === highestNewMilestone);
+        if (milestone) {
+          // Play sound for the highest new milestone reached
+          playNotificationSound(highestNewMilestone === 100);
+
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('Painel do Motorista', {
+              body: milestone.label,
+              icon: 'https://cdn-icons-png.flaticon.com/512/2344/2344132.png'
+            });
+          }
+
+          // Mark all milestones up to this one as notified
+          const reachedSoFar = milestones
+            .filter(m => m.percentage <= highestNewMilestone)
+            .map(m => String(m.percentage));
+          
+          setNotifiedMilestones(prev => {
+            const unique = new Set([...prev, ...reachedSoFar]);
+            return Array.from(unique);
+          });
+        }
+      }
+    }
+  }, [currentTotalGrossToday, dailyGoal, notifiedMilestones, audioEnabled]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('dailyGoal', String(dailyGoal));
+  }, [dailyGoal]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('sales', sales);
+  }, [sales]);
 
   const addSale = () => {
     const id = Date.now();
@@ -102,6 +290,11 @@ export default function App() {
     setTimeout(() => setConfirmedSaleId(null), 2000);
   };
 
+  const confirmSaleName = (id: number) => {
+    setConfirmedNameId(id);
+    setTimeout(() => setConfirmedNameId(null), 2000);
+  };
+
   const updateSale = (id: number, field: string, value: string | number) => {
     setSales(sales.map(sale => sale.id === id ? { ...sale, [field]: value } : sale));
   };
@@ -109,12 +302,26 @@ export default function App() {
   const removeSale = (id: number) => {
     setSales(sales.filter(sale => sale.id !== id));
   };
-  const [uberData, setUberData] = useState({ earnings: '' as number | string, km: '' as number | string, min: '' as number | string });
-  const [uberManual, setUberManual] = useState({ earnings: '' as number | string, km: '' as number | string, min: '' as number | string });
-  const [ninenineData, setNinenineData] = useState({ earnings: '' as number | string, km: '' as number | string, min: '' as number | string });
-  const [ninenineManual, setNinenineManual] = useState({ earnings: '' as number | string, km: '' as number | string, min: '' as number | string });
-  const [ocrLoaded, setOcrLoaded] = useState<{uber: boolean, ninenine: boolean}>({uber: false, ninenine: false});
-  const [isProcessing, setIsProcessing] = useState<{uber?: boolean, ninenine?: boolean}>({});
+
+  React.useEffect(() => {
+    safeLocalStorageSet('uberManual', uberManual);
+  }, [uberManual]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('ninenineManual', ninenineManual);
+  }, [ninenineManual]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('ocrLoaded', ocrLoaded);
+  }, [ocrLoaded]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('uberData', uberData);
+  }, [uberData]);
+
+  React.useEffect(() => {
+    safeLocalStorageSet('ninenineData', ninenineData);
+  }, [ninenineData]);
 
   const extractDataFromImage = async (file: File) => {
     return new Promise<{earnings: string, km: string, min: string}>(async (resolve, reject) => {
@@ -125,42 +332,71 @@ export default function App() {
           try {
             const base64Data = (reader.result as string).split(',')[1];
             const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: {
-                parts: [
-                  { inlineData: { mimeType: file.type, data: base64Data } },
-                  { text: "Você é um especialista em extração de dados de aplicativos de transporte. Analise este print da Uber ou 99 (pode ter tons amarelos). Extraia: Ganhos totais, KM total e Tempo total. Retorne EXATAMENTE este formato JSON: {\"earnings\": \"0.00\", \"km\": \"0.0\", \"min\": \"0\"}. Se o tempo estiver em horas/minutos, converta tudo para minutos totais. Use ponto para decimais." }
-                ],
-              },
+              model: "gemini-3.5-flash",
+              contents: [
+                { inlineData: { mimeType: file.type || "image/jpeg", data: base64Data } },
+                { text: "Você é um especialista em OCR de alta precisão para interfaces de aplicativos Android (Uber e 99). Sua tarefa é extrair Ganhos, Distância (KM) e Tempo (Minutos).\n\nFOCO ABSOLUTO NOS TOTAIS:\n1. Procure pelos números em destaque que representam o resumo do dia ou período.\n2. IGNORE: Bolinhas flutuantes (WhatsApp/Messenger), prints em tela dividida (só extraia do app de transporte), notificações de topo ou propagandas.\n3. CONVERSÃO DE TEMPO: Exemplo: '1h 30min' -> 90.\n\nRetorne EXCLUSIVAMENTE o JSON estruturado." }
+              ],
               config: { 
                 responseMimeType: "application/json",
                 responseSchema: {
                   type: Type.OBJECT,
                   properties: {
-                    earnings: { type: Type.STRING },
-                    km: { type: Type.STRING },
-                    min: { type: Type.STRING },
+                    earnings: { type: Type.STRING, description: "Valor total em dinheiro (ex: 150.50)" },
+                    km: { type: Type.STRING, description: "Quilometragem total (ex: 120.4)" },
+                    min: { type: Type.STRING, description: "Tempo total em minutos (ex: 300)" },
                   },
                   required: ["earnings", "km", "min"],
                 }
               },
             });
 
-            const rawData = JSON.parse(response.text);
-            const sanitize = (val: any) => {
-              const str = String(val || '0').replace(/[^\d.,]/g, '');
-              if (str.includes('.') && str.includes(',')) return str.replace(/\./g, '').replace(',', '.');
-              return str.replace(',', '.');
-            };
+            if (!response.text) {
+              console.error("Gemini response empty:", response);
+              throw new Error("A IA não conseguiu identificar os campos. Certifique-se que o print é do resumo de ganhos.");
+            }
 
-            resolve({
-              earnings: sanitize(rawData.earnings),
-              km: sanitize(rawData.km),
-              min: sanitize(rawData.min)
-            });
-          } catch (e) {
+            let rawData;
+            try {
+               let cleanText = response.text.trim();
+               // Limpeza profunda de markdown caso ocorra erro no responseMimeType
+               cleanText = cleanText.replace(/```json\s?|```/g, "").trim();
+               rawData = JSON.parse(cleanText);
+            } catch (e) {
+               console.error("JSON Parse Error:", e, response.text);
+               alert("Erro de leitura: A imagem parece estar muito poluída com outros apps. Tente um print limpo.");
+               reject(e);
+               return;
+            }
+             const sanitize = (val: any) => {
+               if (val === undefined || val === null) return '0.00';
+               let str = String(val).trim();
+               // Remove R$, KM, MIN and any other labels, keeping numbers, commas and dots
+               str = str.replace(/[^\d.,]/g, '');
+               if (str.length === 0) return '0.00';
+               
+               // Logic to handle European/Brazilian vs American formats:
+               if (str.includes('.') && str.includes(',')) {
+                 if (str.lastIndexOf('.') < str.lastIndexOf(',')) {
+                   // 1.234,56 pattern
+                   return str.replace(/\./g, '').replace(',', '.');
+                 } else {
+                   // 1,234.56 pattern
+                   return str.replace(/,/g, '');
+                 }
+               }
+               return str.replace(',', '.');
+             };
+
+             resolve({
+               earnings: sanitize(rawData.earnings),
+               km: sanitize(rawData.km),
+               min: sanitize(rawData.min)
+             });
+          } catch (e: any) {
             console.error("Gemini Error:", e);
-            alert("Falha ao comunicar com a IA (Gemini). Verifique se o print está nítido ou tente novamente em instantes.");
+            const errorMsg = e.message || "Erro desconhecido";
+            alert(`Falha na IA (Gemini): ${errorMsg}. Verifique sua conexão e se o print está nítido.`);
             reject(e);
           }
         };
@@ -185,6 +421,7 @@ export default function App() {
         console.error(err);
       } finally {
         setIsProcessing(prev => ({ ...prev, uber: false }));
+        if (e.target) e.target.value = '';
       }
       return;
     }
@@ -225,6 +462,7 @@ export default function App() {
         console.error(err);
       } finally {
         setIsProcessing(prev => ({ ...prev, ninenine: false }));
+        if (e.target) e.target.value = '';
       }
       return;
     }
@@ -250,18 +488,24 @@ export default function App() {
     };
     reader.readAsText(file);
   };
-  const [fuelQty, setFuelQty] = useState<number | string>('');
-  const [fuelPrice, setFuelPrice] = useState<number | string>('');
-  const [fuelRange, setFuelRange] = useState<number | string>('');
-  const [fuelType, setFuelType] = useState<'gas' | 'elet'>('gas');
-  const [startKm, setStartKm] = useState<number | string>('');
-  const [endKm, setEndKm] = useState<number | string>('');
+  const [fuelRange, setFuelRange] = useState<number | string>(() => localStorage.getItem('fuelRange') || '');
+  const [fuelType, setFuelType] = useState<'gas' | 'elet'>(() => (localStorage.getItem('fuelType') as 'gas' | 'elet') || 'gas');
+  const [startKm, setStartKm] = useState<number | string>(() => localStorage.getItem('startKm') || '');
+  const [endKm, setEndKm] = useState<number | string>(() => localStorage.getItem('endKm') || '');
+
+  React.useEffect(() => {
+    safeLocalStorageSet('fuelQty', String(fuelQty));
+    safeLocalStorageSet('fuelPrice', String(fuelPrice));
+    safeLocalStorageSet('fuelRange', String(fuelRange));
+    safeLocalStorageSet('fuelType', fuelType);
+    safeLocalStorageSet('startKm', String(startKm));
+    safeLocalStorageSet('endKm', String(endKm));
+  }, [fuelQty, fuelPrice, fuelRange, fuelType, startKm, endKm]);
 
   const uberInputRef = useRef<HTMLInputElement>(null);
   const ninenineInputRef = useRef<HTMLInputElement>(null);
   
-  const totalEarnings = Number(uberData.earnings || 0) + Number(ninenineData.earnings || 0) + sales.reduce((acc, sale) => acc + (Number(sale.qty || 0) * Number(sale.price || 0)), 0);
-  const progressPercentage = dailyGoal && Number(dailyGoal) > 0 ? (totalEarnings / Number(dailyGoal)) * 100 : 0;
+  const progressPercentage = dailyGoal && Number(dailyGoal) > 0 ? (currentTotalGrossToday / Number(dailyGoal)) * 100 : 0;
   const clampedProgress = Math.min(100, progressPercentage);
 
   const getIncentive = (percent: number) => {
@@ -293,12 +537,13 @@ export default function App() {
   const totalEstFuelCost = uberTripCost + ninenineTripCost;
 
   const days = Array.from({ length: 5 }, (_, i) => {
-    const d = new Date();
+    const d = new Date(selectedDate);
     d.setDate(d.getDate() - 2 + i);
     return {
+      date: new Date(d),
       name: d.toLocaleDateString('pt-BR', { weekday: 'short' }).toUpperCase().replace('.', ''),
       day: d.getDate(),
-      current: i === 2,
+      isSelected: d.toLocaleDateString('pt-BR') === selectedDate.toLocaleDateString('pt-BR'),
     };
   });
 
@@ -340,15 +585,17 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 pb-32 font-sans text-slate-50">
+    <div className={`min-h-screen bg-slate-950 pb-32 font-sans text-slate-50 ${theme}`}>
       <input 
         type="file" 
+        accept="image/*"
         ref={uberInputRef} 
         className="hidden" 
         onChange={handleUberUpload} 
       />
       <input 
         type="file" 
+        accept="image/*"
         ref={ninenineInputRef} 
         className="hidden" 
         onChange={handleNinenineUpload} 
@@ -361,16 +608,66 @@ export default function App() {
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-widest text-indigo-400 font-bold -mb-1">Horizon</p>
-            <h1 className="text-xl font-bold tracking-tight text-white uppercase">Painel</h1>
+            <h1 className="text-xl font-bold tracking-tight text-slate-50 uppercase">Painel</h1>
           </div>
         </div>
-        <motion.button 
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.9 }}
-          className="text-slate-400 hover:text-white p-2 rounded-xl bg-slate-800 transition-colors"
-        >
-          <Bell size={24} />
-        </motion.button>
+      <div className="flex items-center gap-3">
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="text-slate-400 hover:text-indigo-400 p-2 rounded-xl bg-slate-800 transition-colors border border-slate-700"
+          >
+            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => {
+              const newStatus = !audioEnabled;
+              setAudioEnabled(newStatus);
+              if (newStatus) {
+                // Unlock and test audio
+                const aud = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+                aud.volume = 0.3;
+                aud.play().catch(() => {});
+              }
+            }}
+            className={`px-3 py-2 rounded-xl border transition-all flex items-center gap-2 ${audioEnabled ? 'bg-emerald-500/10 border-emerald-500/10 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-500'}`}
+          >
+            {audioEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+            <span className="text-[10px] font-bold uppercase hidden sm:block">{audioEnabled ? 'Áudio ON' : 'Mudo'}</span>
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => setShowHelp(true)}
+            className={`p-2 rounded-xl transition-all relative ${deferredPrompt ? 'text-indigo-400 bg-indigo-500/10 border border-indigo-500/30' : 'text-slate-400 bg-slate-800 hover:text-white'}`}
+          >
+            <Info size={20} />
+            {deferredPrompt && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-indigo-500 rounded-full animate-pulse" />
+            )}
+          </motion.button>
+          <div className="flex flex-col items-end mr-2">
+            <p className="text-[8px] uppercase tracking-widest text-slate-500 font-bold">Total Apurado</p>
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-bold text-emerald-400">
+                {showTotal ? `R$ ${currentTotalGrossToday.toFixed(2)}` : '••••••'}
+              </span>
+              <button 
+                onClick={() => setShowTotal(!showTotal)}
+                className="text-slate-500 hover:text-emerald-400 transition-colors"
+              >
+                {showTotal ? <Eye size={12} /> : <EyeOff size={12} />}
+              </button>
+            </div>
+          </div>
+          <motion.button 
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            className="text-slate-400 hover:text-white p-2 rounded-xl bg-slate-800 transition-colors"
+          >
+            <Bell size={24} />
+          </motion.button>
+        </div>
       </header>
 
       <main className="max-w-xl mx-auto p-6 space-y-8">
@@ -380,15 +677,16 @@ export default function App() {
             <section className="flex gap-4 overflow-x-auto no-scrollbar py-2">
               {days.map((d) => (
                 <motion.div 
-                  key={d.day}
+                  key={d.date.toISOString()}
                   whileTap={{ scale: 0.95 }}
-                  className={`flex flex-col items-center justify-center min-w-[70px] h-20 rounded-2xl transition-all duration-300 border ${
-                    d.current 
+                  onClick={() => setSelectedDate(d.date)}
+                  className={`flex flex-col items-center justify-center min-w-[70px] h-20 rounded-2xl transition-all duration-300 border cursor-pointer ${
+                    d.isSelected 
                       ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/30' 
                       : 'bg-slate-900 border-slate-800 text-slate-500'
                   }`}
                 >
-                  <span className={`text-[10px] font-bold tracking-widest uppercase mb-1 ${d.current ? 'text-indigo-200' : 'text-slate-500'}`}>
+                  <span className={`text-[10px] font-bold tracking-widest uppercase mb-1 ${d.isSelected ? 'text-indigo-200' : 'text-slate-500'}`}>
                     {d.name}
                   </span>
                   <span className="text-2xl font-bold">{d.day}</span>
@@ -847,14 +1145,27 @@ export default function App() {
                 <div className="space-y-4">
                   {sales.map((item) => (
                     <div key={item.id} className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
-                      <div className="flex justify-between items-start">
-                        <input 
-                          type="text"
-                          value={item.name}
-                          placeholder="Nome do Produto"
-                          onChange={(e) => updateSale(item.id, 'name', e.target.value)}
-                          className="bg-transparent border-none p-0 text-sm font-bold text-white uppercase tracking-tight focus:ring-0 w-full mr-4"
-                        />
+                      <div className="flex justify-between items-center gap-2">
+                        <div className="flex-1 flex items-center gap-2">
+                          <input 
+                            type="text"
+                            value={item.name}
+                            placeholder="Nome do Produto"
+                            onChange={(e) => updateSale(item.id, 'name', e.target.value)}
+                            className="bg-transparent border-none p-0 text-sm font-bold text-white uppercase tracking-tight focus:ring-0 flex-1"
+                          />
+                          <motion.button
+                            whileTap={{ scale: 0.9 }}
+                            onClick={() => confirmSaleName(item.id)}
+                            className={`p-1 rounded-md transition-all ${
+                              confirmedNameId === item.id 
+                                ? 'bg-emerald-500 text-white' 
+                                : 'text-slate-600 hover:text-emerald-500'
+                            }`}
+                          >
+                            <Check size={14} strokeWidth={confirmedNameId === item.id ? 3 : 2} />
+                          </motion.button>
+                        </div>
                         <button onClick={() => removeSale(item.id)} className="text-slate-600 hover:text-rose-500 transition-colors">
                           <PlusCircle size={16} className="rotate-45" />
                         </button>
@@ -962,7 +1273,7 @@ export default function App() {
               <div className="flex justify-between items-end mb-10">
                 <div>
                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.3em] mb-2">Ganhos Líquidos Totais</p>
-                  <h2 className="text-4xl font-bold tracking-tight text-white">R$ {(Number(uberData.earnings || 0) + Number(ninenineData.earnings || 0) + sales.reduce((acc, sale) => acc + (Number(sale.qty || 0) * Number(sale.price || 0)), 0) - Number(totalFuel)).toFixed(2)}</h2>
+                  <h2 className="text-4xl font-bold tracking-tight text-pure">R$ {(Number(uberData.earnings || 0) + Number(ninenineData.earnings || 0) + sales.reduce((acc, sale) => acc + (Number(sale.qty || 0) * Number(sale.price || 0)), 0) - Number(totalFuel)).toFixed(2)}</h2>
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Bruto</p>
@@ -1003,7 +1314,7 @@ export default function App() {
                 <div className="flex justify-between items-center p-6 bg-slate-950 rounded-3xl border border-slate-800 relative overflow-hidden">
                    <div className="absolute top-0 right-0 w-20 h-20 bg-white/5 rounded-full -mr-10 -mt-10 blur-xl" />
                   <span className="text-xs text-slate-500 font-bold uppercase tracking-widest">Ganhos este Ano</span>
-                  <span className="text-3xl font-black text-white">R$ {stats.year.toFixed(2)}</span>
+                  <span className="text-3xl font-black text-pure">R$ {stats.year.toFixed(2)}</span>
                 </div>
               </div>
             </section>
@@ -1055,7 +1366,7 @@ export default function App() {
                         <p className="text-[9px] text-slate-500 font-bold uppercase tracking-tight">Desempenho Plataformas</p>
                         <div className="space-y-2">
                            <div className="flex justify-between items-center bg-white/5 p-2 rounded-lg border border-white/10">
-                              <span className="text-[10px] font-bold text-white">Uber</span>
+                              <span className="text-[10px] font-bold text-black">Uber Driver</span>
                               <span className="text-[10px] text-slate-400">R$ {Number(item.uber.earnings || 0).toFixed(2)} • {item.uber.km || 0}km • {item.uber.min || 0}min</span>
                            </div>
                            <div className="flex justify-between items-center bg-yellow-500/5 p-2 rounded-lg border border-yellow-500/10">
@@ -1107,7 +1418,324 @@ export default function App() {
             </section>
           </div>
         )}
+
+        {/* Carteira Tab */}
+        {activeTab === 'carteira' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
+            {/* Monthly Summary */}
+            <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 relative overflow-hidden">
+               <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-16 -mt-16 blur-3xl" />
+               <div className="flex justify-between items-center mb-6">
+                 <div>
+                   <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-1">Resumo Combustível</h3>
+                   <p className="text-[10px] text-indigo-400 font-bold uppercase">Mês Atual</p>
+                 </div>
+                 <Fuel size={24} className="text-emerald-500" />
+               </div>
+               
+               <div className="grid grid-cols-2 gap-4">
+                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
+                   <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">Gasto Total</p>
+                   <p className="text-xl font-bold text-pure">R$ {fuelStats.monthlyTotal.toFixed(2)}</p>
+                 </div>
+                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
+                   <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mb-1">Consumo Total</p>
+                   <p className="text-xl font-bold text-pure">{fuelStats.monthlyQty.toFixed(1)} <span className="text-xs text-slate-500">L/kWh</span></p>
+                 </div>
+               </div>
+            </section>
+
+            {/* Manual Entry Form */}
+            <Card className="space-y-6">
+              <div className="flex items-center gap-2 border-b border-slate-800 pb-4">
+                <PlusCircle size={18} className="text-indigo-500" />
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Registrar Abastecimento</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <InputGroup 
+                  label={`Quantidade (${fuelType === 'gas' ? 'L' : 'kWh'})`} 
+                  value={fuelQty} 
+                  type="number" 
+                  onChange={(e: any) => setFuelQty(e.target.value)} 
+                />
+                <InputGroup 
+                  label="Preço Unitário" 
+                  value={fuelPrice} 
+                  type="number" 
+                  onChange={(e: any) => setFuelPrice(e.target.value)} 
+                />
+              </div>
+              <div className="flex justify-between items-center p-4 bg-slate-950 border border-slate-800 rounded-2xl">
+                <div>
+                   <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Total a Pagar</p>
+                   <p className="text-xl font-bold text-emerald-400">R$ {totalFuel}</p>
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    if (!fuelQty || !fuelPrice) return;
+                    const entry = {
+                      id: Date.now(),
+                      date: new Date().toLocaleDateString('pt-BR'),
+                      qty: fuelQty,
+                      price: fuelPrice,
+                      totalCost: totalFuel,
+                      type: fuelType
+                    };
+                    setFuelHistory([entry, ...fuelHistory]);
+                    setFuelQty('');
+                    setFuelPrice('');
+                    // Optional: play sound
+                    playNotificationSound(false);
+                  }}
+                  className="bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl uppercase tracking-widest text-[10px] shadow-lg shadow-indigo-600/20"
+                >
+                  Confirmar Registro
+                </motion.button>
+              </div>
+            </Card>
+
+            {/* History List */}
+            <section className="space-y-4">
+              <div className="flex items-center gap-2 px-2">
+                <Clock size={16} className="text-slate-500" />
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Histórico de Lançamentos</h3>
+              </div>
+              
+              {fuelHistory.length === 0 ? (
+                <div className="text-center py-10 bg-slate-900/30 rounded-3xl border border-dashed border-slate-800 text-slate-600">
+                  <p className="text-[10px] uppercase tracking-widest font-bold">Nenhum registro ainda</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {fuelHistory.map((item) => (
+                    <motion.div 
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      key={item.id} 
+                      className="p-4 bg-slate-900/50 border border-slate-800 rounded-2xl flex justify-between items-center group"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center">
+                          <Fuel size={18} className={item.type === 'gas' ? 'text-orange-400' : 'text-emerald-400'} />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-white">{item.date}</p>
+                          <p className="text-[10px] text-slate-500">{item.qty} {item.type === 'gas' ? 'L' : 'kWh'} x R$ {item.price}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <p className="text-sm font-bold text-white">R$ {Number(item.totalCost).toFixed(2)}</p>
+                        <button 
+                          onClick={() => setFuelHistory(fuelHistory.filter(f => f.id !== item.id))}
+                          className="text-slate-600 hover:text-rose-500 p-2 opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
       </main>
+
+      <AnimatePresence>
+        {showHelp && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <Card className="max-w-md w-full bg-slate-900 border-slate-800 max-h-[80vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-lg font-bold uppercase tracking-tight">Instalação Android</h2>
+                <button onClick={() => setShowHelp(false)} className="text-slate-500 hover:text-white">
+                  <PlusCircle size={24} className="rotate-45" />
+                </button>
+              </div>
+              
+              <div className="space-y-6 text-sm text-slate-300">
+                {deferredPrompt ? (
+                  <div className="p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl text-center space-y-3 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 bg-indigo-500 text-[8px] font-bold uppercase px-2 py-0.5 rounded-bl-lg tracking-widest text-white animate-pulse">
+                      Disponível
+                    </div>
+                    <p className="font-bold text-white text-sm flex justify-center items-center gap-2">
+                      <Smartphone size={18} className="text-indigo-400 animate-bounce" /> Instalação Direta!
+                    </p>
+                    <p className="text-xs text-slate-300">
+                      Seu dispositivo Android suporta instalação nativa com 1 clique. Toque abaixo para adicionar o Painel na sua tela inicial instantaneamente.
+                    </p>
+                    <button
+                      onClick={async () => {
+                        if (deferredPrompt) {
+                          try {
+                            await deferredPrompt.prompt();
+                            const { outcome } = await deferredPrompt.userChoice;
+                            console.log(`PWA installation choice: ${outcome}`);
+                            if (outcome === 'accepted') {
+                              setDeferredPrompt(null);
+                              setShowHelp(false);
+                            }
+                          } catch (err) {
+                            console.error("Installation prompt rejected:", err);
+                          }
+                        }
+                      }}
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition-all shadow-lg hover:shadow-indigo-500/20 active:scale-95 cursor-pointer"
+                    >
+                      Instalar Aplicativo Android
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-800/40 border border-slate-700/60 rounded-2xl text-center space-y-2">
+                    <p className="text-xs font-semibold text-slate-300 flex justify-center items-center gap-2">
+                      <Smartphone size={16} className="text-indigo-400" /> WebApp para Android
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Este é um <strong className="text-indigo-400">Progressive Web App (PWA)</strong>. Ele funciona exatamente como o aplicativo de loja: roda em tela cheia, sem barras do navegador e fica salvo na tela oficial do celular.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-[10px]">1</span>
+                    Abra no Google Chrome
+                  </p>
+                  <p>Certifique-se de estar usando o Chrome no seu Android.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-[10px]">2</span>
+                    Toque nos Três Pontinhos
+                  </p>
+                  <p>No canto superior direito do Chrome, toque no ícone de menu (⋮).</p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-[10px]">3</span>
+                    Adicionar à Tela Inicial
+                  </p>
+                  <p>Procure a opção <span className="text-white font-mono bg-indigo-600 px-1 rounded">Instalar Aplicativo</span> ou <span className="text-white font-mono bg-indigo-600 px-1 rounded">Adicionar à tela inicial</span>.</p>
+                </div>
+              </div>
+
+              <div className="space-y-6 text-sm text-slate-300 pt-6 border-t border-slate-800">
+                <h2 className="text-lg font-bold uppercase tracking-tight text-indigo-400">Problemas com Leituras?</h2>
+                
+                <div className="space-y-4">
+                  <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
+                       <Smartphone size={14} className="text-indigo-400" /> Android: Onde achar o print?
+                    </p>
+                    <p className="text-xs">Ao tocar em importar, procure pela pasta <span className="text-indigo-400 font-bold underline">Screenshots</span> ou <span className="text-indigo-400 font-bold underline">Capturas de Tela</span> no seu gerenciador de arquivos ou galeria.</p>
+                  </div>
+
+                  <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
+                       <Check size={14} className="text-emerald-500" /> Print de Boa Qualidade
+                    </p>
+                    <p className="text-xs">O print deve mostrar claramente os ganhos, KM e tempo. Evite tirar foto da tela de outro celular (isso distorce os números).</p>
+                  </div>
+
+                  <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
+                       <Check size={14} className="text-emerald-500" /> Tente Novamente
+                    </p>
+                    <p className="text-xs">Às vezes o servidor da IA pode estar instável. Se der erro, tente reenviar o print uma segunda vez.</p>
+                  </div>
+
+                  <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
+                       <Check size={14} className="text-emerald-500" /> Lançamento Manual
+                    </p>
+                    <p className="text-xs">Se o seu celular ou o print for muito escuro/claro, você pode digitar os valores manualmente nos campos <span className="text-emerald-400 font-bold">VALOR</span>, <span className="text-blue-400 font-bold">KM</span> e <span className="text-red-400 font-bold">MIN</span> e tocar em <span className="text-indigo-400 font-bold">CONFIRMAR LANÇAMENTO</span>.</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-[10px]">4</span>
+                    Confirme e Notificações
+                  </p>
+                  <p>Toque em "Instalar". Ao abrir o app, <span className="text-emerald-400 font-bold">permita as notificações</span> para receber alertas de progresso da meta.</p>
+                </div>
+
+                <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2 mb-2">
+                    <Info size={12} /> Dica para Redmi Note 12
+                  </p>
+                  <p className="text-xs">
+                    Se o ícone não aparecer, verifique em: <br/>
+                    <span className="italic">Configurações {">"} Apps {">"} Gerenciar Apps {">"} Chrome {">"} Outras permissões {">"} Atalhos na tela inicial</span> (deve estar Ativado).
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-[10px]">5</span>
+                    Link de Instalação (PWA)
+                  </p>
+                  <div className="p-3 bg-slate-950 border border-indigo-500/30 rounded-xl">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Link de Deploy:</p>
+                    <div className="flex gap-2 items-center mb-2">
+                      <code className="text-indigo-400 font-mono text-[10px] break-all bg-indigo-950/30 p-1 rounded grow">
+                        https://ais-pre-d2khhrldt7atmod5hdggi6-179133240478.us-west2.run.app
+                      </code>
+                      <button 
+                        onClick={() => {
+                          navigator.clipboard.writeText("https://ais-pre-d2khhrldt7atmod5hdggi6-179133240478.us-west2.run.app");
+                          alert("Link copiado!");
+                        }}
+                        className="p-2 bg-indigo-600 rounded-lg hover:bg-indigo-500 transition-colors"
+                        title="Copiar Link"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      <p className="mb-1"><span className="text-white font-bold">Dica:</span> Para instalar no Android:</p>
+                      <ol className="list-decimal list-inside space-y-1">
+                        <li>Abra o link no Chrome do celular</li>
+                        <li>Toque nos <span className="text-white">3 pontinhos</span> (menu)</li>
+                        <li>Selecione <span className="text-white underline">"Instalar aplicativo"</span> ou <span className="text-white underline">"Adicionar à tela inicial"</span></li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-800">
+                  <button 
+                    onClick={() => {
+                      if (confirm("Deseja realmente limpar todos os dados salvos? Isso não pode ser desfeito.")) {
+                        localStorage.clear();
+                        window.location.reload();
+                      }
+                    }}
+                    className="text-[10px] text-rose-500 hover:text-rose-400 font-bold uppercase tracking-widest flex items-center gap-2"
+                  >
+                    <Trash2 size={12} /> Limpar Todos os Dados do Painel
+                  </button>
+                </div>
+              </div>
+              
+              <button 
+                onClick={() => setShowHelp(false)}
+                className="w-full mt-8 bg-indigo-500 text-white font-bold py-3 rounded-xl uppercase tracking-widest text-xs"
+              >
+                Entendi
+              </button>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-6 pb-10 pt-4 bg-slate-900/90 backdrop-blur-xl border-t border-slate-800">

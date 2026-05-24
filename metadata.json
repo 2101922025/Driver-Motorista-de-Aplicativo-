@@ -1,6 +1,6 @@
 {
-  "name": "Horizon Fleet",
-  "description": "Professional driver management dashboard with Geometric Balance design, tracking Uber, 99, and inventory.",
+  "name": "Painel do Motorista",
+  "description": "Painel profissional para motoristas de aplicativo (Uber, 99) com controle de ganhos, gastos, metas e vendas extras.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }
